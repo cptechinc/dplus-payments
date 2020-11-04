@@ -1,0 +1,211 @@
+<?php namespace ProcessWire;
+
+use PaymentQuery, Payment;
+
+include_once(__DIR__.'/PaymentsApiRequest.php');
+/**
+ * 
+ * @property  bool                $debug        For Debug?
+ */
+class Payments extends WireData implements Module {
+	private $debug = false;
+
+	public function __construct() {
+		$this->response = Payment::create_response();
+		$this->gateway = null;
+	}
+
+	/**
+	 * Return if Debug Mode is on
+	 * @return bool
+	 */
+	public function is_debug() {
+		return $this->debug;
+	}
+
+	/**
+	 * Set Debug Value
+	 * @param  bool $debug
+	 * @return void
+	 */
+	public function set_debug(bool $debug = false) {
+		$this->debug = $debug;
+	}
+
+/* =============================================================
+	Processing Functions
+============================================================= */
+	/**
+	 * Call Gateway to send Transaction Request
+	 * @param  string $ordn Order Number
+	 * @return void
+	 */
+	public function process($ordn) {
+		$this->delete_response($ordn);
+
+		if ($this->request_exists($ordn)) {
+			$credentials = $this->get_credentials();
+			$request = $this->get_request($ordn);
+			$request->set_salt($this->get_salt($request, $credentials));
+			$this->gateway = $this->get_gateway();
+			$this->gateway->set_credentials($credentials);
+			$this->gateway->process($request);
+			$this->process_response($request);
+		} else {
+			$this->create_error_response("$ordn", "Order $ordn Request does not exist");
+		}
+	}
+
+	/**
+	 * Undocumented function
+	 * @return void
+	 */
+	public function process_response(Payment $request) {
+		$this->response = $this->gateway->response;
+		$this->response->setAmount($request->amount);
+		$this->response->save();
+		if ($this->debug) {
+			$this->response->setCardnbr($request->cardnumber());
+			$this->response->setExpdate($request->expiredate());
+			$this->response->setCvv($request->cvv());
+		}
+	}
+
+	/**
+	 * Return Gateway Module to make Transaction Request
+	 * @return object
+	 */
+	public function get_gateway() {
+		$name = ucfirst($this->config->payments->gateway);
+		return $this->wire('modules')->get("Payments$name");
+	}
+
+	/**
+	 * Return Salt Value for request
+	 * @param  Payment $request
+	 * @param  array   $credentials
+	 * @return string
+	 */
+	public function get_salt(Payment $request, array $credentials) {
+		$col = $credentials['saltcolumn'];
+		return $request->$col;
+	}
+
+	/**
+	 * Return Credentials for Gateway
+	 * @return array
+	 */
+	public function get_credentials() {
+		$file = __DIR__."/credentials.json";
+
+		if (file_exists($file)) {
+			$json = json_decode(file_get_contents($file), true);
+			return $json["0"];
+		}
+	}
+	
+
+/* =============================================================
+	DB Payment Functions
+============================================================= */
+	/**
+	 * Return Payment Request
+	 * @param  string $ordn Order Number
+	 * @return Payment
+	 */
+	public function get_request($ordn) {
+		$q = $this->query_payment($ordn, Payment::RECORDTYPE_REQUEST);
+		return $q->findOne();
+	}
+
+	/**
+	 * Return if Request Exists
+	 * @param  string $ordn Order Number
+	 * @return bool
+	 */
+	public function request_exists($ordn) {
+		$q = $this->query_payment($ordn, Payment::RECORDTYPE_REQUEST);
+		return boolval($q->count());
+	}
+
+	/**
+	 * Return if Response Exists
+	 * @param  string $ordn Order Number
+	 * @return bool
+	 */
+	public function response_exists($ordn) {
+		$q = $this->query_payment($ordn, Payment::RECORDTYPE_RESPONSE);
+		return boolval($q->count());
+	}
+	
+	/**
+	 * Delete Existing Response
+	 * @param  string $ordn Order Number
+	 * @return bool
+	 */
+	public function delete_response($ordn) {
+		$q = $this->query_payment($ordn, Payment::RECORDTYPE_RESPONSE);
+		if ($q->count()) {
+			$q->delete();
+		}
+	}
+
+	/**
+	 * Return PaymentQuery
+	 * @param  string $ordn Order Number
+	 * @param  string $type Record Type
+	 * @return PaymentQuery
+	 */
+	public function query_payment($ordn = '', $type = '') {
+		$q = PaymentQuery::create();
+
+		if ($ordn) {
+			$q->filterByOrdn($ordn);
+		}
+		if ($type) {
+			$q->filterByRectype($type);
+		}
+		return $q;
+	}
+
+/* =============================================================
+	Response Functions
+============================================================= */
+	/**
+	 * Return Response
+	 * @return Payment|null
+	 */
+	public function get_response() {
+		return $this->response;
+	}
+
+	/**
+	 * Set Error Response
+	 * @return void
+	 */
+	private function create_error_response($ordn = '', $msg = '') {
+		$this->response = Payment::create_response();
+		$this->response->setOrdn($ordn);
+		$this->response->set_result_declined();
+		$this->response->setErrormsg($msg);
+		$this->response->set_datetime();
+		$this->response->save();
+	}
+
+/* =============================================================
+	ProcessWire Module Functions
+============================================================= */
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Payments',
+			'version' => 101,
+			'summary' => 'Wrapper Class for calling Payments',
+			'singular' => true,
+			'autoload' => true,
+		);
+	}
+
+	public function init() {
+		$this->config->payments = $this->wire('modules')->get('PaymentsConfig');
+	}
+}

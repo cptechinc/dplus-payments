@@ -1,0 +1,59 @@
+<?php namespace ProcessWire;
+
+use Propel\Runtime\ServiceContainer\ServiceContainerInterface;
+
+/**
+ * DplusOnlineDatabase
+ *
+ * Class for Creating Connection to the dpluso(x) databases for Dplus
+ * NOTE these are the Session based database so the data is only live for the session and last refresh
+ */
+class DplusPaymentsDatabase extends DplusDatabase implements ConfigurableModule {
+	const CONNECTION_NAME_PROPEL = 'paymentsdb';
+	const CONNECTION_NAME_PW     = 'payments';
+
+	/**
+	 * Returns Config to connect to Database
+	 * @return Config
+	 */
+	public function dbconfig() {
+		$config = $this->wire('config');
+		$dbconfig = parent::dbconfig();
+
+		if (!empty($this->db_name)){
+			$this->db_name = $this->db_name;
+		} else {
+			$this->db_name = !empty($config->dplusdbname) ? $config->dplusdbname : "payments";
+		}
+		return $dbconfig;
+	}
+
+/* =============================================================
+	Propel Functions
+============================================================= */
+	/**
+	 * Sets the Default datasource
+	 * NOTE we don't want it to do anything when connecting
+	 * @param ServiceContainerInterface $serviceContainer
+	 */
+	protected function setPropelDefaultService(ServiceContainerInterface $serviceContainer) {
+
+	}
+
+/* =============================================================
+	ProcessWire Module Functions
+============================================================= */
+	public static function getModuleInfo() {
+		$infoArray = array(
+			'title'    => 'Dplus Payments Database Connection',
+			'version'  => 115,
+			'summary'  => "Creates Connection to Dplus Payments Database",
+			'autoload' => true,
+			'singular' => true,
+			'author'   => 'pauldro',
+			'icon'     => 'database',
+			'requires' => array('DplusDatabase')
+		);
+		return $infoArray;
+	}
+}

@@ -1,0 +1,85 @@
+<?php namespace ProcessWire;
+
+use Propel\Runtime\Connection\ConnectionManagerSingle;
+use Propel\Runtime\Propel;
+use Propel\Runtime\ServiceContainer\ServiceContainerInterface;
+
+/**
+ * DplusDatabase
+ *
+ * Class for Creating Connection to the data(x) databases for Dplus
+ * NOTE these are the DPLUS main files, not pertaining to a session
+ */
+class PaymentsConfig extends Process implements ConfigurableModule {
+	const CONFIG_FIELDS = array(
+		'gateway' => array(
+			'name'        => 'gateway',
+			'type'        => 'select',
+			'label'       => 'Gateway',
+			'description' => 'Payment Gateway / API to send Requests',
+			'notes'       => '',
+			'icon'        => 'fa-road',
+			'required'    => true,
+			'options'     => array(
+				'authorizenet' => 'Authorize.Net',
+				'paytrace'     => 'Paytrace'
+			)
+		),
+	);
+
+	/**
+	 * Returns Default Configuration Values
+	 * @var array
+	 */
+	static public function getDefaultConfig() {
+		return array(
+			'gateway'    => ''
+		);
+	}
+
+	/* =============================================================
+		ProcessWire Module Functions
+	============================================================= */
+	public function __construct() {
+		foreach(self::getDefaultConfig() as $key => $value) {
+			$this->$key = $value;
+		}
+	}
+
+	public function init() {
+
+	}
+
+	public static function getModuleInfo() {
+		$infoArray = array(
+			'title'    => 'Dplus Payments Configuration',
+			'version'  => 115,
+			'summary'  => "Configures Dplus Payments",
+			'autoload' => true,
+			'singular' => true,
+			'author'   => 'pauldro',
+			'icon'     => 'credit-card'
+		);
+		return $infoArray;
+	}
+
+	/**
+	 * Return Input Fields for Database Connectiion Configuration
+	 * @var InputfieldWrapper
+	 */
+	static public function getModuleConfigInputfields(array $data) {
+		$modules = wire('modules');
+		$config = wire('config');
+		$fieldmaker = $modules->get('ConfigFields');
+
+		$fields = new InputfieldWrapper();
+		$defaults = self::getDefaultConfig();
+		$data = array_merge($defaults, $data);
+
+		foreach (self::CONFIG_FIELDS as $name => $traits) {
+			$f = $fieldmaker->inputfield($traits, $data[$name]);
+			$fields->add($f);
+		}
+		return $fields;
+	}
+}

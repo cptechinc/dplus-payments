@@ -1,0 +1,480 @@
+<?php namespace ProcessWire;
+
+use Payment;
+
+include_once(__DIR__.'/../PaymentsCredentials.php');
+include_once(__DIR__.'/../PaymentsApiRequest.php');
+include_once(__DIR__.'/PaytraceHttpResponse.php');
+
+/**
+ * PaymentsPaytrace
+ * 
+ * Class for sending Payment Requests to Paytrace API
+ * 
+ * @property  PaymentsCredentials $credentials  API Credentials
+ * @property  Payment             $response     Payment Response
+ * @property  PaymentsApiRequest  $api          Payment API Request, response
+ */
+class PaymentsPaytrace extends WireData implements Module {
+	const OAUTH_GRANTTYPE = 'password';
+	const URL_BASE = "https://api.paytrace.com";
+	const APIVERSION = '/v1';
+
+	const ENDPOINTS = array(
+		'oauth' 	 => '/oauth/token',
+		'keyed_sale' => '/v1/transactions/sale/keyed',
+		//'swiped_sale' => '/transactions/sale/swiped',
+		'keyed_authorization' => '/v1/transactions/authorization/keyed',
+		//'keyed_refund' => '/v1/transactions/refund/keyed',
+		'capture' => '/v1/transactions/authorization/capture',
+		'void' => '/v1/transactions/void',
+		'refund' => '/v1/transactions/refundauth/for_transaction',
+		'ping' => '/ping',
+	);
+
+	public function __construct() {
+		parent::__construct();
+		$this->credentials = new PaymentsCredentials();
+		$this->response = Payment::create_response();
+		$this->api = new PaymentsApiRequest();
+	}
+
+/* =============================================================
+	Interface Functions
+============================================================= */
+	/**
+	 * Processes Request, sends Transaction Request to API
+	 * @param Payment $request
+	 * @return void
+	 */
+	public function process(Payment $request) {
+		switch ($request->type) {
+			case 'DEBIT':
+				$this->capture($request);
+				break;
+			case 'CREDIT':
+				$this->refund($request);
+				break;
+			case 'PREAUTH':
+				$this->preauthorize($request);
+				break;
+			case 'CPREAUTH':
+				$this->capture_preauthorized($request);
+				break;
+			case 'VOID':
+				$this->void($request);
+				break;
+		}
+	}
+
+	/**
+	 * Request Capture Payment
+	 * @param  Payment $request
+	 * @return void
+	 */
+	public function capture(Payment $request) {
+		$data = $this->data_capture($request);
+		$this->request($request, $data, $this->get_endpoint_url('keyed_sale'));
+	}
+
+	/**
+	 * Request Refund Payment
+	 * @param  Payment $request
+	 * @return void
+	 */
+	public function refund(Payment $request) {
+		$data = $this->data_refund($request);
+		$this->request($request, $data, $this->get_endpoint_url('refund'));
+	}
+
+	/**
+	 * Request Capture Payment
+	 * @param  Payment $request
+	 * @return void
+	 */
+	public function capture_preauthorized(Payment $request) {
+		$data = $this->data_capture_preauthorized($request);
+		$this->request($request, $data, $this->get_endpoint_url('capture'));
+	}
+
+	/**
+	 * Request Capture Payment
+	 * @param  Payment $request
+	 * @return void
+	 */
+	public function preauthorize(Payment $request) {
+		$data = $this->data_authorize($request);
+		$this->request($request, $data, $this->get_endpoint_url('keyed_authorization'));
+	}
+
+	/**
+	 * Request Capture Payment
+	 * @param  Payment $request
+	 * @return void
+	 */
+	public function void(Payment $request) {
+		$data = $this->data_void($request);
+		$this->request($request, $data, $this->get_endpoint_url('void'));
+	}
+
+/* =============================================================
+	Paytrace Request Data Functions
+============================================================= */
+	/**
+	 * Return Array for Capture Request
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function data_capture(Payment $request) {
+		return $this->_data_creditcard_cnp($request);	
+	}
+
+	/**
+	 * Return Array for Refund Request
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function data_refund(Payment $request) {
+		$data =  array(
+			"transaction_id" => $request->transactionid,
+			"amount" => $request->amount(),
+			"csc"=> $request->cvv(),
+			"billing_address"=> $this->_data_billing_address($request)
+		);
+		return array_merge($this->_data($request), $data);
+	}
+
+	/**
+	 * Return Array for Void Request
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function data_void(Payment $request) {
+		return $this->_data_transactionid($request);
+	}
+	
+
+	/**
+	 * Return Array for Authorize Request
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function data_authorize(Payment $request) {
+		return $this->_data_creditcard_cnp($request);
+	}
+
+	/**
+	 * Return Array for Void Request
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function data_capture_preauthorized(Payment $request) {
+		return $this->_data_transactionid($request);
+	}
+
+	/**
+	 * Returns Base Array Needed for Request Data
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function _data(Payment $request) {
+		return array(
+			'integrator_id' => $this->credentials->integratorid,
+			'invoice_id'    => $request->ordn,
+		);
+	}
+
+	/**
+	 * Return Credit Card Request Data for CARD NOT PRESENT
+	 * @param Payment $request
+	 * @return array
+	 */
+	private function _data_creditcard_cnp(Payment $request) {
+		$date = $this->convert_date($request->expiredate());
+		$data =  array(
+			"amount" => $request->amount,
+			"credit_card"=> array (
+				 "number"=> $request->cardnumber(),
+				 "expiration_month"=> $date[0],
+				 "expiration_year"=> $date[1]
+			),
+			"csc"=> $request->cvv(),
+			"billing_address"=> $this->_data_billing_address($request)
+		);
+		return array_merge($this->_data($request), $data);
+	}
+
+	/**
+	 * Return Billing Address Data
+	 * @param  Payment $request
+	 * @return array
+	 */
+	private function _data_billing_address(Payment $request) {
+		return array(
+			"name"=> $request->card_name,
+			"street_address"=> $request->street,
+			"city"=> "",
+			"state"=> "",
+			"zip"=> $request->zipcode
+		);
+	}
+
+	/**
+	 * Return Request Data that only needs Transaction ID
+	 * @param Payment $request
+	 * @return array
+	 */
+	private function _data_transactionid(Payment $request) {
+		$data =  array(
+			"transaction_id" => $request->transactionid
+		);
+		return array_merge($this->_data($request), $data);
+	}
+
+/* =============================================================
+	Request Functions
+============================================================= */
+	/**
+	 * Return OAuth Token Response
+	 * @return PaytraceHttpResponse
+	 */
+	public function get_ouath_token() {
+		$http = new WireHttp();
+		$result = new PaytraceHttpResponse();
+		$http->setData(['grant_type' => 'password', 'username' => $this->credentials->login, 'password' => $this->credentials->key]);
+		$response = $http->post($this->get_endpoint_url('oauth'));
+
+		$result->httpcode = $http->getHttpCode();
+		
+		if ($response === false) {
+			$result->error = true;
+			$result->message = 'Request failed, httpcode:' . $http->getHttpCode();
+			return $result;
+		}
+		$result->json = $response;
+		return $result;
+	}
+
+	/**
+	 * Request Transaction
+	 * @param  Payment $payment
+	 * @param  array   $data    Transaction Data
+	 * @param  string  $url
+	 * @return void
+	 */
+	public function request(Payment $payment, array $data, $url) {
+		$oauth = $this->get_ouath_token();
+
+		if ($this->verify_oauth($oauth)) {
+			$json = $this->json_decode($oauth->json);
+			$token =  sprintf("Bearer %s", $json['access_token']);
+			
+			$result = $this->send_transaction($token, $data, $url);
+			$this->api->url = $url;
+			$this->api->request = $data;
+			$this->api->response = $this->json_decode($result);
+			$this->process_response($payment, $result);
+		} else {
+			$this->response->decline();
+			$this->response->set_datetime();
+			$this->response->setOrdn($payment->ordn);
+			$this->response->setErrorMsg('Unable to Verify OAuth Token');
+		}
+	}
+
+	/**
+	 * Send Transaction Request
+	 * @param  string  $token OAuth Token
+	 * @param  array   $data  Transaction Data
+	 * @param  string  $url   Endpoint URL
+	 * @return PaytraceHttpResponse
+	 */
+	protected function send_transaction($token, array $data, $url) {
+		$http = $this->setup_http($token, $data);
+		$response = $http->post($url);
+		return $this->process_http_response($http, $response);
+	}
+
+/* =============================================================
+	Response Functions
+============================================================= */
+	/**
+	 * Verify OAuth Token Response
+	 * @param  PaytraceHttpResponse $oauth_response
+	 * @return bool
+	 */
+	public function verify_oauth($oauth_response) {
+		$valid = true;
+
+		if ($oauth_response->error) {
+			$valid = false;
+			$this->wire('log')->error('Request error with OAuth request: ' . $oauth_response->message);
+			return $valid;
+		}
+
+		//If we reach here, we have been able to communicate with the service, 
+		//next is decode the json response and then review Http Status code of the request 
+		//and move forward with further request.
+		$json = $this->json_decode($oauth_response->json);
+		
+		if ($oauth_response->httpcode != 200) { 
+			$valid = false;
+			if (!empty($oauth_response->json)) {
+				$msg = "OAuth Error: ". $json['error'] . " - ". $json['error_description'] ." Http:" . $oauth_response->httpcode;
+			} else {
+				$msg = "OAuth Request Error: " . $oauth_response->httpcode;
+			}
+			$this->wire('log')->error($msg);
+		} else {
+			$valid = true;
+		}
+		return $valid;
+	}
+
+	/**
+	 * Return PaytraceHttpResponse based on HTTP Response
+	 * @param  WireHttp $http
+	 * @param  string   $response
+	 * @return PaytraceHttpResponse
+	 */
+	public function process_http_response(WireHttp $http, $response) {
+		$result = new PaytraceHttpResponse();
+		$result->httpcode = $http->getHttpCode();
+		$result->headers = $http->getResponseHeaders();
+		$result->json = $response;
+		
+		if (empty($response)) {
+			$result->error = true;
+			$result->message = 'Request failed, httpcode:' . $http->getHttpCode();
+			return $result;
+		}
+		
+		return $result;
+	}
+
+	/**
+	 * Intrepret API Response
+	 * @param  Payment                $payment
+	 * @param  PaytraceHttpResponse   $response API Response Data
+	 * @return void
+	 */
+	public function process_response(Payment $payment, PaytraceHttpResponse $response) {
+		$this->response = Payment::create_response();
+		$this->response->setOrdernbr($payment->ordn);
+		$this->response->setType($payment->type);
+		$apiresponse = $this->json_decode($response->json);
+
+		if ($apiresponse['success']) {
+			$this->response->approve();
+			$this->response->setTransactionid($apiresponse['transaction_id']);
+
+			if (array_key_exists('approval_code', $apiresponse)) {
+				$this->response->setAuthcode($apiresponse['approval_code']);
+			}
+			if (array_key_exists('avs_response', $apiresponse)) {
+				$this->response->setAvs($apiresponse['avs_response']);
+			}
+		} else {
+			$this->response->decline();
+			if (array_key_exists('transaction_id', $apiresponse)) {
+				$this->response->setTransactionid($apiresponse['transaction_id']);
+			}
+			
+			$this->response->setErrorCode($apiresponse['response_code']);
+			$this->response->setErrormsg($apiresponse['status_message']);
+			if (array_key_exists('errors', $apiresponse)) {
+				$errors = $apiresponse['errors'];
+				$codes = array_keys($errors);
+				$msgs  = array_values($errors);
+				$this->response->setErrorCode($codes[0]);
+				$this->response->setErrormsg($msgs[0][0]);
+			}
+		}
+		$this->response->set_datetime();
+		$this->response->save();
+	}
+
+/* =============================================================
+	Class Functions
+============================================================= */
+	/**
+	 * Return Date converted into AuthorizeNet format (YYYY-MM)
+	 * @param  string $date
+	 * @return array
+	 */
+	private function convert_date($date) {
+		if (strpos($date, '/') !== FALSE) {
+			return explode('/', $date);
+		} elseif(strlen($date) == 4) {
+			$month = substr($date, 0, 2);
+			$year = "20". substr($date, 2, 2);
+			return [$month, $year];
+		}
+	}
+
+	/**
+	 * Set Credentials Necessary for API
+	 * @param  array $credentials
+	 * @return void
+	 */
+	public function set_credentials(array $credentials) {
+		$this->credentials->login   = $credentials['login'];
+		$this->credentials->key     = $credentials['key'];
+		$this->credentials->sandbox = $credentials['sandbox'];
+		$this->credentials->integratorid  = $credentials['integratorid'];
+	}
+
+	/**
+	 * Decode JSON string
+	 * @param  string $json_string
+	 * @return array|null
+	 */
+	public function json_decode($json_string) {
+		if (empty($json_string)){
+			return null;
+		}
+		return json_decode($json_string, true); 
+	}
+
+	/**
+	 * Return URL to API Endpoint
+	 * @param  string $endpoint
+	 * @return string
+	 */
+	private function get_endpoint_url($endpoint) {
+		$url = self::URL_BASE;
+		$url .= self::ENDPOINTS[$endpoint];
+		return $url;
+	}
+
+	/**
+	 * Return WireHttp with $header and $data Set
+	 * @param  string $token  OAuth Token
+	 * @param  array  $data   Request Data
+	 * @return WireHttp
+	 */
+	private function setup_http($token, array $data) {
+		$http = new WireHttp();
+		$header = array(
+			'Content-type' => 'application/json',
+			'Authorization' => $token,
+			'Cache-Control' => 'no-cache'
+		);
+		$http->setHeaders($header);
+		$http->setData(json_encode($data));
+		return $http;
+	}
+
+/* =============================================================
+	ProcessWire Module Functions
+============================================================= */
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Payments Paytrace',
+			'version' => 101,
+			'summary' => 'Sends Payment Requests to Paytrace',
+			'singular' => true,
+			'autoload' => true,
+		);
+	}
+}

@@ -1,0 +1,21 @@
+# Project Configurations
+.ftpconfig
+.ftpignore
+.vscode
+site/config.php
+project.cson
+/vendor
+/modules/Dplus/Payments/credentials.json
+
+
+# DW Dreamweaver added files
+_notes
+_compareTemp
+dwsync.xml
+dw_php_codehinting.config
+*.mno
+
+
+# Processwire Directories
+site/assets
+wire

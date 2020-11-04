@@ -5,7 +5,8 @@
 site/config.php
 project.cson
 /vendor
-/modules/Dplus/Payments/credentials.json
+site/modules/Dplus/Payments/credentials.json
+site/modules/ProcessExportProfile
 
 
 # DW Dreamweaver added files

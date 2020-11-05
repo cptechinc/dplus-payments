@@ -7,6 +7,7 @@ project.cson
 /vendor
 site/modules/Payments/credentials.json
 site/modules/ProcessExportProfile
+test.php
 
 
 # DW Dreamweaver added files

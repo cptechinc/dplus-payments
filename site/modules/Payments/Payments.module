@@ -3,11 +3,18 @@
 use PaymentQuery, Payment;
 
 include_once(__DIR__.'/PaymentsApiRequest.php');
+
 /**
+ * Payments
+ * Wrapper Class for processing transaction requests through a gateway class
  * 
- * @property  bool                $debug        For Debug?
+ * @property  bool     $debug        For Debug?
+ * @property  Payment  $response     Class Holding Response from Gateway
+ * @property  Module   $gateway      Class for sending API requests to configured gateway
  */
 class Payments extends WireData implements Module {
+	const LOG_DEBUG = 'payments-debug';
+
 	private $debug = false;
 
 	public function __construct() {
@@ -41,9 +48,8 @@ class Payments extends WireData implements Module {
 	 * @return void
 	 */
 	public function process($ordn) {
-		$this->delete_response($ordn);
-
 		if ($this->request_exists($ordn)) {
+			$this->delete_response($ordn);
 			$credentials = $this->get_credentials();
 			$request = $this->get_request($ordn);
 			$request->set_salt($this->get_salt($request, $credentials));
@@ -52,7 +58,13 @@ class Payments extends WireData implements Module {
 			$this->gateway->process($request);
 			$this->process_response($request);
 		} else {
-			$this->create_error_response("$ordn", "Order $ordn Request does not exist");
+			if (empty($ordn)) {
+				$this->delete_response('-');
+				$this->create_error_response("-", "Order Number not Provided");
+			} else {
+				$this->delete_response($ordn);
+				$this->create_error_response("$ordn", "Order $ordn Request does not exist");
+			}
 		}
 	}
 
@@ -62,13 +74,46 @@ class Payments extends WireData implements Module {
 	 */
 	public function process_response(Payment $request) {
 		$this->response = $this->gateway->response;
+		if ($this->response->is_approved()) {
+			$this->response->setAvsmsg('');
+		}
 		$this->response->setAmount($request->amount);
 		$this->response->save();
+
 		if ($this->debug) {
+			$this->log_debug($request);
 			$this->response->setCardnbr($request->cardnumber());
 			$this->response->setExpdate($request->expiredate());
 			$this->response->setCvv($request->cvv());
 		}
+	}
+
+	/**
+	 * Log Transaction Request and Response for Debug
+	 * @param  Payment $request Payment Request
+	 * @return void
+	 */
+	private function log_debug(Payment $request) {
+		$log = $this->wire('log');
+		$json = array(
+			'gateway' => $this->config->payments->gateway,
+			'ordn' => $request->ordn,
+			'request' => array(
+				'amount' => $request->amount,
+				'type'   => $request->type,
+				'transactionid' => $request->transactionid
+			),
+			'response' => array(
+				'amount' => $this->response->amount,
+				'type'   => $this->response->type,
+				'transactionid' => $this->response->transactionid,
+				'authcode' => $this->response->authcode,
+				'result' => $this->response->result,
+				'errorcode' => $this->response->errorcode,
+				'avs' => $this->response->avsmsg,
+			)
+		);
+		$log->save(self::LOG_DEBUG, "Transaction: " . json_encode($json));
 	}
 
 	/**
@@ -103,7 +148,7 @@ class Payments extends WireData implements Module {
 			return $json["0"];
 		}
 	}
-	
+
 
 /* =============================================================
 	DB Payment Functions
@@ -137,7 +182,7 @@ class Payments extends WireData implements Module {
 		$q = $this->query_payment($ordn, Payment::RECORDTYPE_RESPONSE);
 		return boolval($q->count());
 	}
-	
+
 	/**
 	 * Delete Existing Response
 	 * @param  string $ordn Order Number
@@ -158,10 +203,7 @@ class Payments extends WireData implements Module {
 	 */
 	public function query_payment($ordn = '', $type = '') {
 		$q = PaymentQuery::create();
-
-		if ($ordn) {
-			$q->filterByOrdn($ordn);
-		}
+		$q->filterByOrdn($ordn);
 		if ($type) {
 			$q->filterByRectype($type);
 		}
@@ -186,7 +228,7 @@ class Payments extends WireData implements Module {
 	private function create_error_response($ordn = '', $msg = '') {
 		$this->response = Payment::create_response();
 		$this->response->setOrdn($ordn);
-		$this->response->set_result_declined();
+		$this->response->decline();
 		$this->response->setErrormsg($msg);
 		$this->response->set_datetime();
 		$this->response->save();

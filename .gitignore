@@ -5,7 +5,7 @@
 site/config.php
 project.cson
 /vendor
-site\modules\Payments\credentials.json
+site/modules/Payments/credentials.json
 site/modules/ProcessExportProfile
 
 
